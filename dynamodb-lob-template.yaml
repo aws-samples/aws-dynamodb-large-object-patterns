@@ -1,0 +1,525 @@
+## Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+## SPDX-License-Identifier: MIT-0
+---
+Transform: AWS::Serverless-2016-10-31
+
+Resources:
+  WidgetsDynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: "PAY_PER_REQUEST"
+      ContributorInsightsSpecification:
+        Enabled: true
+      AttributeDefinitions:
+        - AttributeName: "sales_order_id"
+          AttributeType: "S"
+        - AttributeName: "part"
+          AttributeType: "S"
+      KeySchema:
+        - AttributeName: "sales_order_id"
+          KeyType: "HASH"
+        - AttributeName: "part"
+          KeyType: "RANGE"
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: "KMS"
+      TableName: !Join ["-", [!Ref AWS::StackName, "SalesOrder"]]
+
+  OffRowStorageBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  LambdaItemSplittingReadRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+      Policies:
+        - PolicyName: ddb
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "dynamodb:GetItem"
+                  - "dynamodb:Query"
+                  - "dynamodb:DescribeTable"
+                Resource: !GetAtt WidgetsDynamoDBTable.Arn
+        - PolicyName: logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                  - "logs:DescribeLogStreams"
+                Resource: "arn:aws:logs:*:*:*"
+
+  LambdaItemSplittingWriteRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+      Policies:
+        - PolicyName: ddb
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "dynamodb:PutItem"
+                  - "dynamodb:DescribeTable"
+                Resource: !GetAtt WidgetsDynamoDBTable.Arn
+        - PolicyName: s3
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "s3:GetObject"
+                  - "s3:GetSignedUrl"
+                  - "s3:PutObject"
+                Resource: !Join ["", [!GetAtt OffRowStorageBucket.Arn, "/*"]]
+              - Effect: Allow
+                Action:
+                  - "s3:ListBucket"
+                Resource: !GetAtt OffRowStorageBucket.Arn
+        - PolicyName: logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                  - "logs:DescribeLogStreams"
+                Resource: "arn:aws:logs:*:*:*"
+
+  LambdaS3ReadRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+      Policies:
+        - PolicyName: ddb
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "dynamodb:GetItem"
+                  - "dynamodb:Query"
+                  - "dynamodb:DescribeTable"
+                Resource: !GetAtt WidgetsDynamoDBTable.Arn
+        - PolicyName: s3
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "s3:GetObject"
+                  - "s3:GetSignedUrl"
+                Resource: !Join ["", [!GetAtt OffRowStorageBucket.Arn, "/*"]]
+              - Effect: Allow
+                Action:
+                  - "s3:ListBucket"
+                Resource: !GetAtt OffRowStorageBucket.Arn
+        - PolicyName: logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                  - "logs:DescribeLogStreams"
+                Resource: "arn:aws:logs:*:*:*"
+
+  LambdaS3WriteRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+      Policies:
+        - PolicyName: ddb
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "dynamodb:PutItem"
+                  - "dynamodb:DescribeTable"
+                Resource: !GetAtt WidgetsDynamoDBTable.Arn
+        - PolicyName: s3
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "s3:PutObject"
+                Resource: !Join ["", [!GetAtt OffRowStorageBucket.Arn, "/*"]]
+              - Effect: Allow
+                Action:
+                  - "s3:ListBucket"
+                Resource: !GetAtt OffRowStorageBucket.Arn
+        - PolicyName: logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                  - "logs:DescribeLogStreams"
+                Resource: "arn:aws:logs:*:*:*"
+
+  LambdaSnappyReadRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+      Policies:
+        - PolicyName: ddb
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "dynamodb:GetItem"
+                  - "dynamodb:Query"
+                  - "dynamodb:DescribeTable"
+                Resource: !GetAtt WidgetsDynamoDBTable.Arn
+        - PolicyName: logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                  - "logs:DescribeLogStreams"
+                Resource: "arn:aws:logs:*:*:*"
+
+  LambdaSnappyWriteRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+      Policies:
+        - PolicyName: ddb
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "dynamodb:PutItem"
+                  - "dynamodb:DescribeTable"
+                Resource: !GetAtt WidgetsDynamoDBTable.Arn
+        - PolicyName: logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                  - "logs:DescribeLogStreams"
+                Resource: "arn:aws:logs:*:*:*"
+
+  LambdaUnencodedWriteRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+      Policies:
+        - PolicyName: ddb
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "dynamodb:PutItem"
+                  - "dynamodb:DescribeTable"
+                Resource: !GetAtt WidgetsDynamoDBTable.Arn
+        - PolicyName: logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                  - "logs:DescribeLogStreams"
+                Resource: "arn:aws:logs:*:*:*"
+
+  LambdaZLIBReadRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+      Policies:
+        - PolicyName: ddb
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "dynamodb:GetItem"
+                  - "dynamodb:Query"
+                  - "dynamodb:DescribeTable"
+                Resource: !GetAtt WidgetsDynamoDBTable.Arn
+        - PolicyName: logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                  - "logs:DescribeLogStreams"
+                Resource: "arn:aws:logs:*:*:*"
+
+  LambdaZLIBWriteRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+      Policies:
+        - PolicyName: ddb
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "dynamodb:PutItem"
+                  - "dynamodb:DescribeTable"
+                Resource: !GetAtt WidgetsDynamoDBTable.Arn
+        - PolicyName: logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                  - "logs:DescribeLogStreams"
+                Resource: "arn:aws:logs:*:*:*"
+
+  UnencodedWriteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./unencoded/write
+      MemorySize: 256
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref WidgetsDynamoDBTable
+      Handler: index.lambda_handler
+      Runtime: nodejs14.x
+      Role: !GetAtt LambdaUnencodedWriteRole.Arn
+      Timeout: 60
+      Tracing: Active
+
+  SnappyEncodedWriteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./snappy/write
+      MemorySize: 256
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref WidgetsDynamoDBTable
+      Handler: index.lambda_handler
+      Runtime: nodejs14.x
+      Role: !GetAtt LambdaSnappyWriteRole.Arn
+      Timeout: 60
+      Tracing: Active
+
+  SnappyEncodedReadFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./snappy/read
+      MemorySize: 256
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref WidgetsDynamoDBTable
+      Handler: index.lambda_handler
+      Runtime: nodejs14.x
+      Role: !GetAtt LambdaSnappyReadRole.Arn
+      Timeout: 60
+      Tracing: Active
+
+  GZipEncodedWriteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./zlib/write
+      MemorySize: 256
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref WidgetsDynamoDBTable
+      Handler: index.lambda_handler
+      Runtime: nodejs14.x
+      Role: !GetAtt LambdaZLIBWriteRole.Arn
+      Timeout: 60
+      Tracing: Active
+
+  GZipEncodedReadFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./zlib/read
+      MemorySize: 256
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref WidgetsDynamoDBTable
+      Handler: index.lambda_handler
+      Runtime: nodejs14.x
+      Role: !GetAtt LambdaZLIBReadRole.Arn
+      Timeout: 60
+      Tracing: Active
+
+  S3WriteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./s3/write
+      MemorySize: 256
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref WidgetsDynamoDBTable
+          BUCKET_NAME: !Ref OffRowStorageBucket
+      Handler: index.lambda_handler
+      Runtime: nodejs14.x
+      Role: !GetAtt LambdaS3WriteRole.Arn
+      Timeout: 60
+      Tracing: Active
+
+  S3ReadFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./s3/read
+      MemorySize: 256
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref WidgetsDynamoDBTable
+      Handler: index.lambda_handler
+      Runtime: nodejs14.x
+      Role: !GetAtt LambdaS3ReadRole.Arn
+      Timeout: 60
+      Tracing: Active
+
+  ShardingWriteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./item-splitting/write
+      MemorySize: 256
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref WidgetsDynamoDBTable
+      Handler: index.lambda_handler
+      Runtime: nodejs14.x
+      Role: !GetAtt LambdaItemSplittingWriteRole.Arn
+      Timeout: 60
+      Tracing: Active
+
+  ShardingReadFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./item-splitting/read
+      MemorySize: 256
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref WidgetsDynamoDBTable
+      Handler: index.lambda_handler
+      Runtime: nodejs14.x
+      Role: !GetAtt LambdaItemSplittingReadRole.Arn
+      Timeout: 60
+      Tracing: Active

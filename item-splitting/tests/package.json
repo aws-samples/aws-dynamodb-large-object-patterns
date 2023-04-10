@@ -9,7 +9,7 @@
     "sinon-chai": "^3.7.0"
   },
   "dependencies": {
-    "aws-sdk": "^2.1135.0",
+    "aws-sdk": "^2.1354.0",
     "mocha": "^10.0.0"
   }
 }
